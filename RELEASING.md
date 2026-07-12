@@ -90,16 +90,3 @@ Users on older package versions remain pinned to the old weights. Users can
 test a new release before upgrading by setting
 `FRBENCH_RELEASE=weights-v1.1.0`, but this override is not guaranteed compatible
 with an older package.
-
-## Initial PyPI trusted publisher
-
-Create a pending publisher at <https://pypi.org/manage/account/publishing/> with:
-
-- PyPI project name: `frbench`
-- Owner: `HKU-TASR`
-- Repository name: `FRBench`
-- Workflow name: `publish.yml`
-- Environment name: `pypi`
-
-In the GitHub repository, create an environment named `pypi`. For stronger
-protection, restrict deployment to tags matching `v*` and require a reviewer.

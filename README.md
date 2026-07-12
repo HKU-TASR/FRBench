@@ -3,7 +3,7 @@
 An easy-to-use, **end-to-end differentiable** face-recognition module that ships **45+** pretrained weights,
 
 - covering **25 backbones**, **9 loss functions**, and **3 training datasets** of different **types**,
-- spanning **generations** from **2015 to 2024**.
+- spanning **generations since 2015**
 
 It is designed for **anti-facial-recognition (AFR)** research, where the transferability of attacks across backbones, loss functions, and training datasets is a central concern. But we believe that it benefits the face recognition field just as much.
 
