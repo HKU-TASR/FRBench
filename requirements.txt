@@ -1,0 +1,10 @@
+# Core dependencies (also declared in pyproject.toml)
+torch
+torchvision
+pyyaml
+tqdm
+
+# Demo notebook extras: pip install -e ".[demo]"
+# pillow
+# matplotlib
+# seaborn

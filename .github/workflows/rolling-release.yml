@@ -1,0 +1,39 @@
+name: Update latest source release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rolling-source-release
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pushed commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Move latest tag and recreate prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag --force latest "$GITHUB_SHA"
+          git push origin refs/tags/latest --force
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release delete latest --yes
+          fi
+
+          gh release create latest \
+            --verify-tag \
+            --prerelease \
+            --title "Latest source" \
+            --notes "Rolling source snapshot of main at commit $GITHUB_SHA."

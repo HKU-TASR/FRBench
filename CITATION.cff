@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: FRBench
+message: "If you use FRBench in your research, please cite our work."
+authors:
+  - family-names: Wang
+    given-names: Ziling
+  - family-names: Yang
+    given-names: Shuya
+  - family-names: Lu
+    given-names: Jialin
+  - family-names: Chow
+    given-names: Ka-Ho
+repository-code: "https://github.com/HKU-TASR/FRBench"
+license: MIT
+version: 1.0.0
+preferred-citation:
+  type: conference-paper
+  title: "Protego: User-Centric Pose-Invariant Privacy Protection Against Face Recognition-Induced Digital Footprint Exposure"
+  authors:
+    - family-names: Wang
+      given-names: Ziling
+    - family-names: Yang
+      given-names: Shuya
+    - family-names: Lu
+      given-names: Jialin
+    - family-names: Chow
+      given-names: Ka-Ho
+  collection-title: "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition"
+  year: 2026

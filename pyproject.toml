@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frbench"
+version = "1.0.0"
+description = "Unified, differentiable face-recognition module for AFR and FR research"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [
+    { name = "Ziling Wang" },
+]
+keywords = ["face-recognition", "anti-facial-recognition", "pytorch", "embeddings"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch",
+    "torchvision",
+    "pyyaml",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+demo = [
+    "pillow",
+    "matplotlib",
+    "seaborn",
+]
+
+[project.scripts]
+frbench-download = "frbench.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/HKU-TASR/FRBench"
+Repository = "https://github.com/HKU-TASR/FRBench"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["frbench*"]

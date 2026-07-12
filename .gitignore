@@ -1,0 +1,9 @@
+.vscode/
+.cursor/
+
+__pycache__/
+.DS_Store
+
+frbench.egg-info/
+build/
+dist/
