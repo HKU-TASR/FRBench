@@ -9,6 +9,29 @@ It is designed for **anti-facial-recognition (AFR)** research, where the transfe
 
 Hand it any RGB image tensor (aligned or not); it detects and aligns the face(s), runs the chosen pretrained backbone, and returns embeddings ready for cosine similarity. Because the whole pipeline (detect &rarr; crop &rarr; align &rarr; backbone) is written in pure, differentiable PyTorch, **gradients flow from the embeddings all the way back to the input pixels**, enabling adversarial attacks and other gradient-based methods.
 
+## Quickstart
+
+Install with `pip install frbench` (or `pip install "frbench[demo]"` for the notebook extras).
+
+```python
+import frbench
+import torch
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Inputs must be RGB float tensors in [0, 255] — NOT torchvision ToTensor() [0, 1].
+img = torch.rand(3, 480, 640, device=device) * 255.0
+
+# Specify the backbone, loss, and dataset to load the pretrained weights.
+fr = frbench.FR("mobilevitv3-s", "arcface", "ms1m").to(device)
+result = fr(img, l2_normalize=True)          # FREmbedResult(embeddings, indices, crops)
+print(result.embeddings.shape)               # (1, 512) when one face is found
+
+# Discover available models programmatically
+for m in frbench.list_models():
+    print(m.backbone, m.loss, m.dataset)
+```
+
 ## Table of Contents
 
 - [Highlights](#highlights)
@@ -32,28 +55,6 @@ In anti-facial-recognition (AFR) research, one needs to understand how well an a
 However, existing model zoos such as [face.evoLVe](https://github.com/ZhaoJ9014/face.evoLVe) and [FaceX-Zoo](https://github.com/JDAI-CV/FaceX-Zoo) do not offer this controlled variation over backbones, losses, and datasets. Researchers end up collecting and deploying models from many libraries, and still cannot be confident that the "Swin Transformer" in repo A is the same as the "SwinV1" in repo B.
 
 FRBench addresses this with a **single, unified, differentiable, easy-to-use PyTorch module** backed by a rich set of consistently-trained pretrained weights. (The training code may be released later.)
-
-## Quickstart
-
-```python
-import frbench
-import torch
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Inputs must be RGB float tensors in [0, 255] — NOT torchvision ToTensor() [0, 1].
-img = torch.rand(3, 480, 640, device=device) * 255.0
-
-fr = frbench.FR("mobilevitv3-s", "arcface", "ms1m").to(device)
-result = fr(img, l2_normalize=True)          # FREmbedResult(embeddings, indices, crops)
-print(result.embeddings.shape)               # (1, 512) when one face is found
-
-# Discover available models programmatically
-for m in frbench.list_models():
-    print(m.backbone, m.loss, m.dataset)
-```
-
-Install with `pip install frbench` (or `pip install "frbench[demo]"` for the notebook extras).
 
 ## Installation
 
