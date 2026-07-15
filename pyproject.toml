@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "frbench"
-version = "1.0.0"
+version = "1.1.0"
 description = "Unified, differentiable face-recognition module for AFR and FR research"
 readme = "README.md"
 license = "MIT"
@@ -35,6 +35,11 @@ demo = [
     "pillow",
     "matplotlib",
     "seaborn",
+]
+dev = [
+    "pytest",
+    "build",
+    "twine",
 ]
 
 [project.scripts]

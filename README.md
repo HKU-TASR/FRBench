@@ -15,21 +15,17 @@ Install with `pip install frbench` (or `pip install "frbench[demo]"` for the not
 
 ```python
 import frbench
+from frbench import FR
 import torch
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Inputs must be RGB float tensors in [0, 255] — NOT torchvision ToTensor() [0, 1].
-img = torch.rand(3, 480, 640, device=device) * 255.0
-
-# Specify the backbone, loss, and dataset to load the pretrained weights.
-fr = frbench.FR("mobilevitv3-s", "arcface", "ms1m").to(device)
+device = torch.device("cpu") # cpu, cuda, mps
+img = torch.rand(3, 480, 640, device=device) * 255.0 # RGB, [0, 255], float32 tensor
+fr = FR("mobilevitv3-s", "arcface", "ms1m").to(device)  # (backbone, loss, dataset)
 result = fr(img, l2_normalize=True)          # FREmbedResult(embeddings, indices, crops)
 print(result.embeddings.shape)               # (1, 512) when one face is found
 
-# Discover available models programmatically
 for m in frbench.list_models():
-    print(m.backbone, m.loss, m.dataset)
+    print(m.backbone, m.loss, m.dataset) # available models
 ```
 
 ## Table of Contents
@@ -58,9 +54,11 @@ FRBench addresses this with a **single, unified, differentiable, easy-to-use PyT
 
 ## Installation
 
+### Dependencies
+
 ```bash
-conda create -n ptfr python=3.12
-conda activate ptfr
+conda create -n frbench python=3.12
+conda activate frbench
 pip install frbench                 # core: torch, torchvision, pyyaml, tqdm
 pip install "frbench[demo]"         # optional: pillow, matplotlib, seaborn
 ```
@@ -69,7 +67,9 @@ The core module needs `torch`, `torchvision`, `pyyaml`, and `tqdm` (for download
 
 For local development, clone the repository and run `pip install -e ".[demo]"`.
 
-Weights are downloaded on demand into `~/.frbench` (override with `FRBENCH_CACHE`). Prefetch assets with the CLI:
+### Weights download
+
+Weights are downloaded on demand into `~/.frbench` (see [Notes on Configuration](#notes-on-configuration) to change the cache location). Prefetch assets with the CLI:
 
 ```bash
 frbench-download --list                         # show all manifest keys
@@ -86,30 +86,87 @@ Progress bars use ``tqdm`` and are controlled by `set_download_verbose(bool)` (o
 
 ## Usage
 
-**Input contract:** pass RGB **float** tensors in **`[0, 255]`** (not `torchvision` `ToTensor()` `[0, 1]`). The preprocessor warns if values look normalized.
-
 See [the demo notebook](./demo.ipynb) for a complete, runnable walkthrough.
 
-`forward` / `embed` return a `frbench.FREmbedResult` named tuple with fields `embeddings`, `indices`, and `crops`. When no faces are found, `embeddings` and `crops` are **empty tensors** (never `None`).
+### Face Embedding
 
-Key options (see the docstring for the full list):
+1. **Input contract:** (list of) *RGB* and *[0, 255]* float tensors. The preprocessor warns if values look normalized. Can be of shape:
 
-- `need_crop=False` — inputs are already-aligned 112×112 crops; skip detection.
-- `need_align=False` — crop a (loosened, see `loosen_crop`) square box instead of 5-point aligning.
-- `keep_largest=False` — return an embedding for every detected face, not just the largest.
-- `discard_invalid=True` — drop images with no detected face (default: fall back to the whole image).
-- `tta=("flip_horizontal",)` — test-time augmentations to average over (**default: horizontal flip; doubles backbone cost**). Pass `tta=()` to disable.
-- `l2_normalize=True` — L2-normalize the returned embeddings for direct cosine comparison.
-- `eager_load=True` (constructor) — download weights and build the backbone at init instead of first use.
-- `detections=` — pass precomputed detections from `FR.detect()` to skip re-detection during iterative attacks.
+    - `(3, H, W)` — single image
+    - `(N, 3, H, W)` — batch of N images
+    - A list of `(3, Hi, Wi)` or `(1, 3, Hi, Wi)` tensors — variable-size images
+
+2. **Return type:** `forward` / `embed` return a `frbench.FREmbedResult` named tuple, with fields accessible by name, by unpacking, and via `_asdict()`.
+
+    | Field | Shape | Meaning |
+    | --- | --- | --- |
+    | `embeddings` | `(M, D)` | Face embeddings; empty `(0, D)` when no faces (never `None`). |
+    | `indices` | `len M` | `indices[i]` is the source-image index of `embeddings[i]`. |
+    | `crops` | `(M, 3, H, W)` | Normalized crops fed to the backbone. |
+
+    `result.num_faces` gives `M`, and the result is truthy iff at least one face was produced.
+
+3. **Key options:** (see the docstring for the full list):
+
+    - `need_crop=False` — inputs are already-aligned 112×112 crops; skip detection.
+    - `need_align=False` — crop a (loosened, see `loosen_crop`) square box instead of 5-point aligning.
+    - `keep_largest=False` — return an embedding for every detected face, not just the largest.
+    - `discard_invalid=True` — drop images with no detected face (default: fall back to the whole image).
+    - `tta=("flip_horizontal",)` — test-time augmentations to average over (**default: horizontal flip; doubles backbone cost**). Pass `tta=()` to disable.
+    - `l2_normalize=True` — L2-normalize the returned embeddings for direct cosine comparison.
+    - `eager_load=True` (constructor) — download weights and build the backbone at init instead of first use.
+    - `detections=` — pass precomputed detections from `FR.detect()` to skip re-detection
+
+### Face Detection
+
+Two methods are available for detection, cropping, and alignment: `FR.detect()` and `frbench.FaceDetector`. The former is a convenience wrapper that builds a detector on the fly; the latter is a standalone detector that can be shared across multiple `FR` pipelines so its weights load only once — useful when benchmarking attacks across many backbones:
 
 ```python
-# Detect once, then reuse detections in an optimization loop
-dets = fr.detect([img1, img2])
-for step in range(100):
-    result = fr([img1, img2], detections=dets)
-    loss = ...
-    loss.backward()
+detector = frbench.FaceDetector().to(device)
+frs = [frbench.FR(b, "arcface", "ms1m", detector=detector).to(device)
+       for b in ("irse-100", "swinv2-b", "mobilefacenet")]
+
+dets = detector.detect(imgs)                   # detect once
+results = [fr(imgs, detections=dets) for fr in frs]
+```
+
+Note that `FR.detect()` doesn't build the recognition backbone — it only loads the detector weights.
+
+1. **Input contract:** same as [Face Embedding](#face-embedding) above.
+2. **Return type:** `FR.detect` / `FaceDetector.detect` return a `frbench.FRDetectResult` whose `detections` field holds one entry per image — `None` (no face) or a `(K, 16)` tensor with columns:
+
+    | Columns | Meaning |
+    | --- | --- |
+    | 0-3 | Box `x1, y1, x2, y2` in input pixels. |
+    | 4 | Background probability (`1 - face probability`). |
+    | 5 | Face probability (detection confidence). |
+    | 6-15 | Five landmarks `x1, y1, ..., x5, y5` in input pixels: left eye, right eye, nose, left mouth corner, right mouth corner. |
+
+    You should rarely need to index those columns by hand: use the `dets.boxes`, `dets.scores`, and `dets.landmarks` accessors (per-image lists of `(K, 4)`, `(K,)`, and `(K, 5, 2)` tensors).
+
+    To bring detections from **your own** face detector, build the named tuple with `FRDetectResult.from_landmarks` and pass it to `FR(..., detections=...)`:
+
+    ```python
+    import torch
+    from frbench import FRDetectResult
+
+    # Landmark order: left eye, right eye, nose, left/right mouth corners.
+    ldm = torch.tensor([[38., 52.], [74., 52.], [56., 72.], [42., 92.], [71., 92.]])
+    dets = FRDetectResult.from_landmarks([ldm, None])   # image 0: one face; image 1: none
+    result = fr([img0, img1], detections=dets)          # boxes/scores default sensibly
+    ```
+
+### Face Cropping and Alignment
+
+The geometry primitives are also exported as standalone functions:
+
+```python
+frbench.ARCFACE_112_TEMPLATE            # canonical (5, 2) ArcFace template, 112x112
+frbench.arcface_template((224, 224))    # template scaled to another crop size
+frbench.align(img, landmarks, template) # differentiable 5-point alignment
+frbench.crop(img, boxes)                # differentiable box crop + anti-aliased resize
+frbench.estimate_similarity_transform(landmarks, template)  # (F, 2, 3) closed-form fit
+frbench.invert_similarity(matrix)
 ```
 
 ### Notes on devices
@@ -123,17 +180,51 @@ import torch
 
 ### Notes on configuration
 
-Settings can be overridden via environment variables or module constants in [`frbench/_config.py`](./frbench/_config.py):
+All settings go through one resolution chain, from lowest to highest precedence:
+
+1. Built-in defaults
+2. The persisted config file `~/.frbench/config.json` (location overridable with `FRBENCH_CONFIG`)
+3. Environment variables
+4. Runtime calls to `frbench.configure(...)` (or `set_verbose` and friends)
+5. Active `frbench.configure_scoped(...)` blocks (innermost wins)
 
 | Setting | Env var | Default |
 | --- | --- | --- |
-| Cache directory | `FRBENCH_CACHE` | `~/.frbench` |
-| GitHub repo | `FRBENCH_REPO` | `HKU-TASR/FRBench` |
-| Release tag | `FRBENCH_RELEASE` | `weights-v1.0.0` |
+| `cache` — weights directory | `FRBENCH_CACHE` | `~/.frbench` |
+| `repo` — GitHub repo | `FRBENCH_REPO` | `HKU-TASR/FRBench` |
+| `release` — release tag | `FRBENCH_RELEASE` | `weights-v1.0.0` |
+| `warnings` — inference warnings | `FRBENCH_WARNINGS` | `true` |
+| `download_verbose` — download logs/bars | `FRBENCH_DOWNLOAD_VERBOSE` | `true` |
+| `update_check` — update reminders | `FRBENCH_UPDATE_CHECK` | `true` |
 
-Module-level `frbench.CACHE`, `frbench.REPO`, and `frbench.RELEASE` are also available.
+```python
+import frbench
 
-The face detector defaults to `retinaface_mobilenetv1` and can be changed per model via `FR(..., detector="retinaface_resnet50")`.
+# For this process only:
+frbench.configure(cache="/data/frbench", verbose=False)
+
+# Permanently (written to ~/.frbench/config.json, applies to future processes):
+frbench.configure(cache="/data/frbench", verbose=False, persist=True)
+
+# Temporarily, inside a with-block (thread-safe; restored on exit):
+with frbench.configure_scoped(verbose=False, cache="/tmp/frbench"):
+    fr = frbench.FR("mobilefacenet", "arcface", "ms1m")
+
+# Reset a setting to its default (and remove it from the config file):
+frbench.configure(cache=None, persist=True)
+```
+
+The same persistence is available from the command line:
+
+```bash
+frbench-download --set cache=/data/frbench --set download_verbose=false
+frbench-download --unset cache
+frbench-download --show-config      # resolved values and where each comes from
+```
+
+Module-level `frbench.CACHE`, `frbench.REPO`, and `frbench.RELEASE` are live read-only views of the resolved values (change them with `configure()` — assigning to them has no effect).
+
+The face detector defaults to `retinaface_mobilenetv1` and can be changed per model via `FR(..., detector="retinaface_resnet50")`, or shared across models by passing a `frbench.FaceDetector` instance.
 
 ### Notes on verbosity
 
@@ -145,6 +236,10 @@ import frbench
 frbench.set_warnings(False)          # silence inference warnings (e.g. no face detected)
 frbench.set_download_verbose(False)  # silence download status + progress bars
 frbench.set_verbose(False)           # convenience: both at once
+
+frbench.set_verbose(False, persist=True)   # persist across processes
+with frbench.configure_scoped(verbose=False):
+    ...                                    # silence temporarily
 ```
 
 - **Inference warnings** (no face detected, unsupported TTA, etc.) go through Python's standard `warnings` module under the `frbench.FRBenchWarning` category, so you can also filter or capture them with the usual tools, e.g. `warnings.filterwarnings("ignore", category=frbench.FRBenchWarning)` or `with warnings.catch_warnings(record=True) as w: ...`.
@@ -155,7 +250,7 @@ frbench.set_verbose(False)           # convenience: both at once
 
 On the first `FR(...)` construction or `frbench-download` command in a process, FRBench checks whether a newer package or weights release is available. Results are cached for 24 hours, network failures are ignored, and no check runs merely from importing the package.
 
-Set `FRBENCH_NO_UPDATE_CHECK=1` or call `frbench.set_update_check(False)` to disable these reminders. Installed versions remain pinned to the weights release they were tested with; updating is always explicit.
+Set `FRBENCH_UPDATE_CHECK=0` (the legacy `FRBENCH_NO_UPDATE_CHECK=1` also works) or call `frbench.set_update_check(False)` (add `persist=True` to make it permanent) to disable these reminders. Installed versions remain pinned to the weights release they were tested with; updating is always explicit.
 
 ## Model Zoo
 

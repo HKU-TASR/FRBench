@@ -8,6 +8,7 @@ from torch import nn
 import yaml
 
 from .backbones import build_backbone
+from .detector import FaceDetector
 from .types import FRDetectResult, FREmbedResult
 from ._exceptions import FRBenchAssetNotFoundError
 from .utils.download import get_asset, list_assets
@@ -21,7 +22,7 @@ def _load_yaml(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def _validate_asset_keys(model_name: str, detector_name: str) -> None:
+def _validate_asset_keys(model_name: str, detector_name: Optional[str] = None) -> None:
     """Fail fast if model or detector keys are absent from the manifest."""
     assets = list_assets()
     if model_name not in assets:
@@ -30,7 +31,7 @@ def _validate_asset_keys(model_name: str, detector_name: str) -> None:
             f"Model '{model_name}' not in manifest. "
             f"Check (backbone, loss, dataset). Available models: {available}"
         )
-    if detector_name not in assets:
+    if detector_name is not None and detector_name not in assets:
         raise FRBenchAssetNotFoundError(
             f"Detector '{detector_name}' not in manifest. "
             f"Available detectors: {[a for a in assets if a.startswith('retinaface_')]}"
@@ -45,7 +46,7 @@ class FR(nn.Module):
         backbone_type: str,
         loss_type: str,
         dataset_type: str,
-        detector: str = "retinaface_mobilenetv1",
+        detector: Union[str, FaceDetector] = "retinaface_mobilenetv1",
         *,
         eager_load: bool = False,
     ) -> None:
@@ -55,7 +56,9 @@ class FR(nn.Module):
             backbone_type: Backbone key, e.g. ``irse-100`` or ``mobilefacenet``.
             loss_type: Loss key, e.g. ``arcface``.
             dataset_type: Training dataset key, e.g. ``ms1m``.
-            detector: RetinaFace asset name for detection/alignment.
+            detector: RetinaFace asset name for detection/alignment, or an
+                existing :class:`frbench.FaceDetector` instance to share across
+                multiple pipelines (its weights are then loaded only once).
             eager_load: If ``True``, download weights and build the backbone and
                 preprocessor immediately instead of on first use.
         """
@@ -65,9 +68,14 @@ class FR(nn.Module):
         self.loss_type = loss_type
         self.dataset_type = dataset_type
         self.model_name = f"{backbone_type}_{loss_type}_{dataset_type}"
-        self.detector_name = detector
 
-        _validate_asset_keys(self.model_name, self.detector_name)
+        shared_detector = isinstance(detector, FaceDetector)
+        self.detector = detector if shared_detector else FaceDetector(detector)
+        self.detector_name = self.detector.name
+
+        # A shared detector instance is assumed valid (it may already be built);
+        # only string keys are checked against the manifest.
+        _validate_asset_keys(self.model_name, None if shared_detector else self.detector_name)
 
         self.backbone: Optional[nn.Module] = None
         self.preprocessor: Optional[Preprocessor] = None
@@ -128,7 +136,7 @@ class FR(nn.Module):
             else None
         )
         self.preprocessor = Preprocessor(
-            detector_name=self.detector_name,
+            detector=self.detector,
             mean=tuple(icfg.get("mean", (0.5, 0.5, 0.5))),
             std=tuple(icfg.get("var", icfg.get("std", (0.5, 0.5, 0.5)))),
             size=self._input_size,
@@ -155,6 +163,9 @@ class FR(nn.Module):
     ) -> FRDetectResult:
         """Run face detection without embedding (for detect-once attack workflows).
 
+        Delegates to this pipeline's :class:`frbench.FaceDetector`; only the
+        detector weights are loaded (the recognition backbone is not built).
+
         Args:
             imgs: RGB tensors in ``[0, 255]`` — ``(3,H,W)``, ``(B,3,H,W)``, or a
                 list of per-image tensors.
@@ -164,30 +175,7 @@ class FR(nn.Module):
         Returns:
             :class:`FRDetectResult` with one detection tensor (or ``None``) per image.
         """
-        if not self._built:
-            self._build()
-
-        if isinstance(imgs, (list, tuple)):
-            all_dets: List[Optional[torch.Tensor]] = []
-            for img in imgs:
-                if img.dim() == 4:
-                    img = img.squeeze(0)
-                dets = self.preprocessor.detect(
-                    img.unsqueeze(0).to(self.device),
-                    conf_thresh=conf_thresh,
-                    iou_thresh=iou_thresh,
-                )
-                all_dets.extend(dets)
-            return FRDetectResult(detections=all_dets)
-
-        if imgs.dim() == 3:
-            imgs = imgs.unsqueeze(0)
-        dets = self.preprocessor.detect(
-            imgs.to(self.device),
-            conf_thresh=conf_thresh,
-            iou_thresh=iou_thresh,
-        )
-        return FRDetectResult(detections=dets)
+        return self.detector.detect(imgs, conf_thresh=conf_thresh, iou_thresh=iou_thresh)
 
     def forward(
         self,

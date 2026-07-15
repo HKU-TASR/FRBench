@@ -5,6 +5,7 @@ import argparse
 import sys
 
 import frbench
+from frbench import _config
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,10 +19,61 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="Re-download even if cached")
     parser.add_argument("--refresh", action="store_true", help="Re-download manifest.json before other actions")
     parser.add_argument("--quiet", action="store_true", help="Disable progress bars and logs")
+    parser.add_argument(
+        "--set",
+        metavar="KEY=VALUE",
+        action="append",
+        default=[],
+        dest="set_options",
+        help="Persist a setting to the config file, e.g. --set cache=/data/frbench "
+        "or --set download_verbose=false (repeatable)",
+    )
+    parser.add_argument(
+        "--unset",
+        metavar="KEY",
+        action="append",
+        default=[],
+        dest="unset_options",
+        help="Remove a persisted setting from the config file (repeatable)",
+    )
+    parser.add_argument(
+        "--show-config",
+        action="store_true",
+        help="Show resolved settings, their sources, and the config file path",
+    )
     args = parser.parse_args(argv)
 
     if args.quiet:
         frbench.set_verbose(False)
+
+    config_only = (args.set_options or args.unset_options or args.show_config) and not (
+        args.assets or args.all or args.list or args.list_models or args.refresh
+    )
+
+    if args.set_options or args.unset_options:
+        try:
+            updates = {}
+            for item in args.set_options:
+                key, sep, value = item.partition("=")
+                if not sep or not key:
+                    print(f"Error: --set expects KEY=VALUE, got '{item}'", file=sys.stderr)
+                    return 1
+                updates[key.strip()] = value
+            for key in args.unset_options:
+                updates[key.strip()] = None
+            frbench.configure(**updates, persist=True)
+        except (frbench.FRBenchConfigError, TypeError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        print(f"Updated {_config.config_file_path()}")
+
+    if args.show_config or args.set_options or args.unset_options:
+        print(f"Config file: {_config.config_file_path()}")
+        for key, entry in _config.describe_settings().items():
+            print(f"  {key:<17} = {entry['value']!r:<30} ({entry['source']})")
+
+    if config_only:
+        return 0
 
     from .utils.update_check import check_for_updates
 

@@ -8,27 +8,30 @@ import re
 import time
 import urllib.request
 
-from .._config import __version__, get_cache, get_release, get_repo
+from .._config import __version__, configure, get_cache, get_release, get_repo, get_setting
 from .log import warn
 
 _CACHE_TTL_SECONDS = 24 * 60 * 60
 _PYPI_URL = "https://pypi.org/pypi/frbench/json"
 _SEMVER_RE = re.compile(r"^(?:weights-v|v)?(\d+)\.(\d+)\.(\d+)$")
 
-_UPDATE_CHECK = True
 _CHECKED_THIS_PROCESS = False
 
 
-def set_update_check(enabled: bool = True) -> None:
-    """Enable or disable automatic update reminders for this process."""
-    global _UPDATE_CHECK
-    _UPDATE_CHECK = bool(enabled)
+def set_update_check(enabled: bool = True, *, persist: bool = False) -> None:
+    """Enable or disable automatic update reminders.
+
+    Args:
+        enabled: New value for the switch.
+        persist: If ``True``, also write the value to the FRBench config file
+            so it applies to future processes.
+    """
+    configure(update_check=bool(enabled), persist=persist)
 
 
 def update_check_enabled() -> bool:
     """Return whether automatic update reminders are enabled."""
-    disabled_by_env = os.environ.get("FRBENCH_NO_UPDATE_CHECK", "").lower()
-    return _UPDATE_CHECK and disabled_by_env not in {"1", "true", "yes", "on"}
+    return bool(get_setting("update_check"))
 
 
 def _version_key(version: str) -> Optional[Tuple[int, int, int]]:

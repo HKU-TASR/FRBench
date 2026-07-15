@@ -2,7 +2,9 @@ import os
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-from ._config import CACHE, RELEASE, REPO, __version__
+from . import _config
+from ._config import __version__, configure, configure_scoped
+from .detector import FaceDetector
 from .fr import FR
 from .types import FRDetectResult, FREmbedResult
 from .utils.download import (
@@ -12,6 +14,14 @@ from .utils.download import (
     list_assets,
     list_models,
     refresh_manifest,
+)
+from .utils.geometry import (
+    ARCFACE_112_TEMPLATE,
+    align,
+    arcface_template,
+    crop,
+    estimate_similarity_transform,
+    invert_similarity,
 )
 from .utils.log import (
     FRBenchWarning,
@@ -32,17 +42,26 @@ from ._exceptions import (
 __all__ = [
     "__version__",
     "FR",
+    "FaceDetector",
     "FREmbedResult",
     "FRDetectResult",
     "ModelInfo",
     "CACHE",
     "REPO",
     "RELEASE",
+    "ARCFACE_112_TEMPLATE",
+    "align",
+    "arcface_template",
+    "crop",
+    "estimate_similarity_transform",
+    "invert_similarity",
     "FRBenchWarning",
     "FRBenchError",
     "FRBenchDownloadError",
     "FRBenchAssetNotFoundError",
     "FRBenchConfigError",
+    "configure",
+    "configure_scoped",
     "set_warnings",
     "set_download_verbose",
     "set_verbose",
@@ -56,3 +75,14 @@ __all__ = [
     "download_assets",
     "refresh_manifest",
 ]
+
+
+def __getattr__(name: str):
+    """Expose ``CACHE`` / ``REPO`` / ``RELEASE`` as live, read-only views.
+
+    These reflect the currently resolved configuration (including scoped
+    overrides); change them with :func:`configure` or environment variables.
+    """
+    if name in ("CACHE", "REPO", "RELEASE"):
+        return getattr(_config, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
