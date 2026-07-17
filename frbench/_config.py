@@ -27,7 +27,7 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 
 from ._exceptions import FRBenchConfigError
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 #: Sentinel distinguishing "argument not given" from an explicit ``None``.
 _UNSET = object()

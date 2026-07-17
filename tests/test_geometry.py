@@ -86,6 +86,98 @@ def test_align_is_differentiable():
     assert img.grad is not None and img.grad.abs().sum() > 0
 
 
+def test_unalign_identity_when_landmarks_match_template():
+    aligned = torch.rand(2, 3, 112, 112) * 255
+    ldmks = frbench.ARCFACE_112_TEMPLATE.unsqueeze(0).expand(2, -1, -1)
+    restored = frbench.unalign(aligned, ldmks, (112, 112))
+    assert restored.shape == aligned.shape
+    assert torch.allclose(restored, aligned, atol=1e-2)
+
+
+def test_unalign_uses_source_to_aligned_direction_and_zero_fills():
+    aligned = torch.full((1, 3, 112, 112), 200.0)
+    offset = torch.tensor([15.0, 20.0])
+    ldmks = (frbench.ARCFACE_112_TEMPLATE + offset).unsqueeze(0)
+    restored = frbench.unalign(aligned, ldmks, (150, 160))
+
+    # The aligned crop is translated to x=15..126, y=20..131 in source space.
+    assert torch.allclose(
+        restored[0, :, 40:100, 35:95],
+        torch.full((3, 60, 60), 200.0),
+        atol=1e-3,
+    )
+    assert restored[0, :, :10].count_nonzero() == 0
+    assert restored[0, :, :, :5].count_nonzero() == 0
+
+
+def test_align_unalign_roundtrip_preserves_available_interior():
+    ys, xs = torch.meshgrid(torch.arange(160), torch.arange(160), indexing="ij")
+    img = torch.stack([xs, ys, xs + ys]).float()
+    offset = torch.tensor([20.0, 30.0])
+    ldmks = (frbench.ARCFACE_112_TEMPLATE + offset).unsqueeze(0)
+
+    aligned = frbench.align(img, ldmks)
+    restored = frbench.unalign(aligned, ldmks, (160, 160))
+    assert torch.allclose(restored[0, :, 35:130, 25:120], img[:, 35:130, 25:120], atol=1e-3)
+    assert restored[0, :, :20].count_nonzero() == 0
+
+
+def test_unalign_keeps_multiple_faces_on_independent_canvases():
+    aligned = torch.stack(
+        [
+            torch.full((3, 112, 112), 50.0),
+            torch.full((3, 112, 112), 150.0),
+        ]
+    )
+    offsets = torch.tensor([[10.0, 15.0], [30.0, 35.0]])
+    ldmks = frbench.ARCFACE_112_TEMPLATE.unsqueeze(0) + offsets[:, None, :]
+    restored = frbench.unalign(aligned, ldmks, (160, 170))
+
+    assert restored.shape == (2, 3, 160, 170)
+    assert restored[0, :, 50, 50].mean() == pytest.approx(50.0)
+    assert restored[1, :, 70, 70].mean() == pytest.approx(150.0)
+    assert restored[1, :, 20, 20].count_nonzero() == 0
+
+
+def test_unalign_empty_batch_has_source_canvas_shape():
+    aligned = torch.empty(0, 3, 112, 112)
+    ldmks = torch.empty(0, 5, 2)
+    restored = frbench.unalign(aligned, ldmks, (180, 240))
+    assert restored.shape == (0, 3, 180, 240)
+
+
+def test_unalign_antialiases_when_downsampling():
+    ys, xs = torch.meshgrid(torch.arange(112), torch.arange(112), indexing="ij")
+    checker = ((xs + ys) % 2).float().expand(3, -1, -1).unsqueeze(0)
+    # Source landmarks at half the template coordinates produce a 2x
+    # source-to-aligned scale, so reprojection downsamples 112 -> 56.
+    ldmks = (frbench.ARCFACE_112_TEMPLATE / 2).unsqueeze(0)
+    restored = frbench.unalign(
+        checker,
+        ldmks,
+        (56, 56),
+        max_supersample=2,
+    )
+    interior = restored[0, :, 2:-2, 2:-2]
+    assert interior.mean() == pytest.approx(0.5, abs=1e-3)
+    assert interior.std() < 1e-3
+
+
+def test_unalign_is_differentiable():
+    aligned = torch.rand(1, 3, 112, 112, requires_grad=True)
+    ldmks = (frbench.ARCFACE_112_TEMPLATE + 20.0).unsqueeze(0).requires_grad_(True)
+    restored = frbench.unalign(aligned, ldmks, (150, 150))
+    restored.square().mean().backward()
+    assert aligned.grad is not None and aligned.grad.abs().sum() > 0
+    assert ldmks.grad is not None and ldmks.grad.abs().sum() > 0
+
+
+def test_unalign_rejects_degenerate_landmarks():
+    aligned = torch.rand(1, 3, 112, 112)
+    with pytest.raises(ValueError, match="degenerate"):
+        frbench.unalign(aligned, torch.ones(1, 5, 2), (112, 112))
+
+
 def test_square_boxes():
     boxes = torch.tensor([[0.0, 0.0, 40.0, 20.0]])
     squared = square_boxes(boxes)

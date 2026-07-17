@@ -1,6 +1,7 @@
 """Standalone face detector with alignment and cropping conveniences."""
 from __future__ import annotations
 
+from numbers import Integral
 from typing import List, Optional, Sequence, Tuple, Union
 
 import torch
@@ -12,6 +13,7 @@ from .utils.geometry import (
     arcface_template,
     crop,
     square_boxes,
+    unalign,
     validate_input_range,
 )
 from .utils.retinaface import RetinaFace
@@ -22,6 +24,8 @@ RETINAFACE_BGR_MEAN = [104.0, 117.0, 123.0]
 
 ImagesLike = Union[torch.Tensor, List[torch.Tensor]]
 DetectionsLike = Union[FRDetectResult, Sequence[Optional[torch.Tensor]]]
+AlignedImagesLike = Union[torch.Tensor, Sequence[torch.Tensor]]
+OutputSizesLike = Union[Tuple[int, int], Sequence[Tuple[int, int]]]
 
 
 class FaceDetector(nn.Module):
@@ -40,7 +44,8 @@ class FaceDetector(nn.Module):
         >>> detector = frbench.FaceDetector().to(device)
         >>> dets = detector.detect(img)               # FRDetectResult
         >>> dets.boxes[0], dets.landmarks[0]          # (K, 4), (K, 5, 2)
-        >>> aligned = detector.align(img)[0]          # (K, 3, 112, 112), [0, 255]
+        >>> aligned = detector.align(img, dets)[0]    # (K, 3, 112, 112), [0, 255]
+        >>> restored = detector.unalign(aligned, dets, output_sizes=img.shape[-2:])
         >>> cropped = detector.crop(img, loosen=1.3)[0]
     """
 
@@ -99,6 +104,44 @@ class FaceDetector(nn.Module):
         if imgs.dim() != 4 or imgs.shape[1] != 3:
             raise ValueError(f"Expected (B,3,H,W) or (3,H,W), got {tuple(imgs.shape)}")
         return list(imgs.unbind(dim=0))
+
+    @staticmethod
+    def _as_aligned_list(aligned: AlignedImagesLike) -> List[torch.Tensor]:
+        """Normalize aligned faces to one ``(K, C, H, W)`` tensor per source image."""
+        groups = [aligned] if isinstance(aligned, torch.Tensor) else list(aligned)
+        out: List[torch.Tensor] = []
+        for i, group in enumerate(groups):
+            if group.dim() == 3:
+                group = group.unsqueeze(0)
+            if group.dim() != 4:
+                raise ValueError(
+                    f"aligned[{i}] must have shape (C,H,W) or (K,C,H,W), "
+                    f"got {tuple(group.shape)}"
+                )
+            out.append(group)
+        return out
+
+    @staticmethod
+    def _resolve_output_sizes(
+        output_sizes: OutputSizesLike,
+        num_images: int,
+    ) -> List[Tuple[int, int]]:
+        """Normalize one shared or one-per-image source canvas size."""
+        if (
+            len(output_sizes) == 2
+            and all(isinstance(value, Integral) for value in output_sizes)
+        ):
+            sizes = [(int(output_sizes[0]), int(output_sizes[1]))] * num_images
+        else:
+            sizes = [tuple(map(int, size)) for size in output_sizes]
+            if len(sizes) != num_images:
+                raise ValueError(f"Expected {num_images} output sizes, got {len(sizes)}")
+        for i, size in enumerate(sizes):
+            if len(size) != 2 or min(size) < 2:
+                raise ValueError(
+                    f"output_sizes[{i}] must be an (H,W) pair with both values >= 2"
+                )
+        return sizes
 
     def _detect_batch(
         self,
@@ -226,6 +269,86 @@ class FaceDetector(nn.Module):
                 det = self._keep_largest(det)
             ldmks = det[:, 6:16].reshape(-1, 5, 2).to(img.device)
             out.append(align(img, ldmks, tmpl, size, max_supersample))
+        return out
+
+    def unalign(
+        self,
+        aligned: AlignedImagesLike,
+        detections: DetectionsLike,
+        *,
+        output_sizes: OutputSizesLike,
+        template: Optional[torch.Tensor] = None,
+        keep_largest: bool = False,
+        max_supersample: int = 4,
+    ) -> List[torch.Tensor]:
+        """Reproject aligned faces onto source-image-sized canvases.
+
+        This reverses the spatial mapping used by :meth:`align`, but cannot
+        recover source pixels outside an aligned crop. Those regions are
+        zero-filled, and multiple faces remain on separate canvases.
+
+        Args:
+            aligned: Aligned faces, normally the list returned by :meth:`align`.
+                Accepts one ``(K,C,H,W)`` tensor for one source image or a
+                sequence with one tensor per source image. ``(C,H,W)`` is
+                accepted as a one-face convenience.
+            detections: The detections whose landmarks were used for alignment.
+            output_sizes: Source canvas ``(H,W)`` shared by every image, or one
+                ``(H,W)`` pair per source image.
+            template: Alignment template used to create the faces. By default,
+                the ArcFace template is scaled to each aligned tensor's size.
+            keep_largest: Apply the same largest-face selection as :meth:`align`.
+                Set this when the aligned inputs came from
+                ``align(..., keep_largest=True)``.
+            max_supersample: Anti-aliasing cap; see :func:`frbench.unalign`.
+
+        Returns:
+            One ``(K,C,H,W)`` tensor per source image. Each face occupies a
+            separate, zero-padded source-coordinate canvas.
+        """
+        groups = self._as_aligned_list(aligned)
+        dets = (
+            detections.detections
+            if isinstance(detections, FRDetectResult)
+            else list(detections)
+        )
+        if len(dets) != len(groups):
+            raise ValueError(f"Expected {len(groups)} detections, got {len(dets)}")
+        sizes = self._resolve_output_sizes(output_sizes, len(groups))
+
+        out: List[torch.Tensor] = []
+        for i, (group, det, output_size) in enumerate(zip(groups, dets, sizes)):
+            group = group.to(self.device).float()
+            if det is None or det.shape[0] == 0:
+                if group.shape[0] != 0:
+                    raise ValueError(
+                        f"aligned[{i}] has {group.shape[0]} faces but detections[{i}] "
+                        "has none"
+                    )
+                out.append(group.new_empty((0, group.shape[1], *output_size)))
+                continue
+            if keep_largest:
+                det = self._keep_largest(det)
+            if group.shape[0] != det.shape[0]:
+                raise ValueError(
+                    f"aligned[{i}] has {group.shape[0]} faces but detections[{i}] "
+                    f"has {det.shape[0]}"
+                )
+            ldmks = det[:, 6:16].reshape(-1, 5, 2)
+            tmpl = (
+                template
+                if template is not None
+                else arcface_template((group.shape[-2], group.shape[-1]))
+            )
+            out.append(
+                unalign(
+                    group,
+                    ldmks,
+                    output_size,
+                    template=tmpl,
+                    max_supersample=max_supersample,
+                )
+            )
         return out
 
     def crop(

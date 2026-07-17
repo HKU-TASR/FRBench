@@ -22,6 +22,7 @@ from .utils.geometry import (
     crop,
     estimate_similarity_transform,
     invert_similarity,
+    unalign,
 )
 from .utils.log import (
     FRBenchWarning,
@@ -55,6 +56,7 @@ __all__ = [
     "crop",
     "estimate_similarity_transform",
     "invert_similarity",
+    "unalign",
     "FRBenchWarning",
     "FRBenchError",
     "FRBenchDownloadError",

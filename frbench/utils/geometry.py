@@ -227,6 +227,92 @@ def align(
     return sampled
 
 
+def unalign(
+    aligned: torch.Tensor,
+    ldmks: torch.Tensor,
+    output_size: Tuple[int, int],
+    template: torch.Tensor = ARCFACE_112_TEMPLATE,
+    max_supersample: int = 4,
+) -> torch.Tensor:
+    """Reproject aligned faces onto source-image-sized canvases.
+
+    This is the spatial inverse of :func:`align`, not a lossless image inverse:
+    pixels outside each aligned crop are unavailable and therefore zero-filled.
+    Each face stays on a separate canvas so callers can choose how to composite
+    overlapping faces.
+
+    Args:
+        aligned: ``(F, C, H_aligned, W_aligned)`` aligned face images.
+        ldmks: ``(F, 5, 2)`` landmarks in source-image pixel coordinates.
+        output_size: Source canvas size ``(H, W)``.
+        template: ``(5, 2)`` template used to create ``aligned``, in aligned
+            image pixel coordinates.
+        max_supersample: Maximum anti-aliasing supersample factor. Supersampling
+            is used when the reprojection downsamples ``aligned``.
+
+    Returns:
+        ``(F, C, H, W)`` source-coordinate canvases, zero-filled outside the
+        footprint of each aligned face.
+    """
+    if aligned.dim() != 4:
+        raise ValueError(
+            f"Expected aligned faces with shape (F,C,H,W), got {tuple(aligned.shape)}"
+        )
+    if ldmks.dim() != 3 or ldmks.shape[-2:] != (5, 2):
+        raise ValueError(
+            f"Expected landmarks with shape (F,5,2), got {tuple(ldmks.shape)}"
+        )
+    if aligned.shape[0] != ldmks.shape[0]:
+        raise ValueError(
+            f"Expected {aligned.shape[0]} landmark sets, got {ldmks.shape[0]}"
+        )
+
+    F_num, C, aligned_h, aligned_w = aligned.shape
+    oh, ow = int(output_size[0]), int(output_size[1])
+    if min(aligned_h, aligned_w, oh, ow) < 2:
+        raise ValueError("Aligned images and output canvases must be at least 2x2")
+    if max_supersample < 1:
+        raise ValueError("max_supersample must be at least 1")
+    if F_num == 0:
+        return aligned.new_empty((0, C, oh, ow))
+
+    ldmks = ldmks.to(device=aligned.device, dtype=aligned.dtype)
+    matrix = estimate_similarity_transform(ldmks, template)  # source -> aligned
+    scale = torch.sqrt(matrix[:, 0, 0] ** 2 + matrix[:, 1, 0] ** 2)
+    if not torch.isfinite(scale).all().item() or (scale <= 1e-6).any().item():
+        raise ValueError("Landmarks produce a degenerate similarity transform")
+
+    # Adjacent source pixels are `scale` aligned pixels apart. When scale > 1,
+    # the aligned image is being downsampled and needs an area pre-filter.
+    downsample = scale.amax().item()
+    S = int(min(max_supersample, max(1, math.ceil(downsample))))
+    hs, ws = oh * S, ow * S
+
+    ys, xs = torch.meshgrid(
+        (torch.arange(hs, device=aligned.device, dtype=aligned.dtype) + 0.5) / S
+        - 0.5,
+        (torch.arange(ws, device=aligned.device, dtype=aligned.dtype) + 0.5) / S
+        - 0.5,
+        indexing="ij",
+    )
+    homog = torch.stack([xs, ys, torch.ones_like(xs)], dim=-1).reshape(-1, 3)
+    dst = matrix @ homog.t()  # (F, 2, P), source canvas -> aligned crop
+    gx = 2.0 * dst[:, 0, :] / (aligned_w - 1) - 1.0
+    gy = 2.0 * dst[:, 1, :] / (aligned_h - 1) - 1.0
+    grid = torch.stack([gx, gy], dim=-1).reshape(F_num, hs, ws, 2)
+
+    sampled = F.grid_sample(
+        aligned,
+        grid,
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=True,
+    )
+    if S > 1:
+        sampled = F.avg_pool2d(sampled, kernel_size=S)
+    return sampled
+
+
 def estimate_similarity_transform(landmarks: torch.Tensor, template: torch.Tensor) -> torch.Tensor:
     """Closed-form batched similarity transform mapping landmarks -> template.
 

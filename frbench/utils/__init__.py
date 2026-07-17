@@ -13,6 +13,7 @@ _GEOMETRY_EXPORTS = {
     "estimate_similarity_transform",
     "invert_similarity",
     "square_boxes",
+    "unalign",
 }
 
 __all__ = sorted(_GEOMETRY_EXPORTS | {"Preprocessor", "Postprocessor"})
