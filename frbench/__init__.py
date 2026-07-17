@@ -6,7 +6,7 @@ from . import _config
 from ._config import __version__, configure, configure_scoped
 from .detector import FaceDetector
 from .fr import FR
-from .types import FRDetectResult, FREmbedResult
+from .types import FRDetectResult, FREmbedResult, FRUnalignResult
 from .utils.download import (
     ModelInfo,
     download_assets,
@@ -46,6 +46,7 @@ __all__ = [
     "FaceDetector",
     "FREmbedResult",
     "FRDetectResult",
+    "FRUnalignResult",
     "ModelInfo",
     "CACHE",
     "REPO",

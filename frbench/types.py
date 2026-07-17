@@ -1,14 +1,37 @@
 """Structured return types for the FR pipeline.
 
-Both types are :class:`typing.NamedTuple` subclasses, so they support tuple
+These types are :class:`typing.NamedTuple` subclasses, so they support tuple
 unpacking, ``_asdict()``, and positional or keyword construction in addition
 to the helpers documented below.
 """
 from __future__ import annotations
 
-from typing import List, NamedTuple, Optional, Sequence, Union
+from typing import Generic, List, NamedTuple, Optional, Sequence, TypeVar, Union
 
 import torch
+
+T = TypeVar("T")
+
+
+class FRUnalignResult(NamedTuple, Generic[T]):
+    """Canvases and binary masks returned by unalignment with mask output.
+
+    The container type mirrors its caller: standalone :func:`frbench.unalign`
+    uses tensors, while :meth:`frbench.FaceDetector.unalign` uses per-image
+    tensor lists.
+
+    Attributes:
+        canvases: Faces reprojected onto source-coordinate canvases.
+        masks: Matching boolean, single-channel coverage masks.
+
+    Examples:
+        >>> result = frbench.unalign(aligned, landmarks, size, return_mask=True)
+        >>> result.canvases.shape, result.masks.shape
+        >>> canvases, masks = result  # tuple unpacking also works
+    """
+
+    canvases: T
+    masks: T
 
 
 class FREmbedResult(NamedTuple):

@@ -1,8 +1,8 @@
-"""FRDetectResult / FREmbedResult accessors and builders (offline)."""
+"""Structured result accessors and builders (offline)."""
 import pytest
 import torch
 
-from frbench import FRDetectResult, FREmbedResult
+from frbench import FRDetectResult, FREmbedResult, FRUnalignResult
 
 
 def _det_row(box, score, ldm):
@@ -98,3 +98,15 @@ def test_embed_result_helpers():
     assert bool(filled) is True
     embeddings, indices, crops = filled  # tuple unpacking
     assert embeddings.shape == (2, 512) and indices == [0, 1]
+
+
+def test_unalign_result_named_fields_and_tuple_unpacking():
+    canvases = torch.zeros(2, 3, 64, 80)
+    masks = torch.ones(2, 1, 64, 80, dtype=torch.bool)
+    result = FRUnalignResult(canvases=canvases, masks=masks)
+
+    assert result.canvases is canvases
+    assert result.masks is masks
+    unpacked_canvases, unpacked_masks = result
+    assert unpacked_canvases is canvases
+    assert unpacked_masks is masks

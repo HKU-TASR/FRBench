@@ -7,7 +7,7 @@ from typing import List, Optional, Sequence, Tuple, Union
 import torch
 from torch import nn
 
-from .types import FRDetectResult
+from .types import FRDetectResult, FRUnalignResult
 from .utils.geometry import (
     align,
     arcface_template,
@@ -280,7 +280,11 @@ class FaceDetector(nn.Module):
         template: Optional[torch.Tensor] = None,
         keep_largest: bool = False,
         max_supersample: int = 4,
-    ) -> List[torch.Tensor]:
+        return_mask: bool = False,
+    ) -> Union[
+        List[torch.Tensor],
+        FRUnalignResult[List[torch.Tensor]],
+    ]:
         """Reproject aligned faces onto source-image-sized canvases.
 
         This reverses the spatial mapping used by :meth:`align`, but cannot
@@ -301,10 +305,14 @@ class FaceDetector(nn.Module):
                 Set this when the aligned inputs came from
                 ``align(..., keep_largest=True)``.
             max_supersample: Anti-aliasing cap; see :func:`frbench.unalign`.
+            return_mask: If ``True``, also return one boolean, single-channel
+                coverage mask per face.
 
         Returns:
-            One ``(K,C,H,W)`` tensor per source image. Each face occupies a
-            separate, zero-padded source-coordinate canvas.
+            By default, one ``(K,C,H,W)`` canvas tensor per source image. With
+            ``return_mask=True``, an :class:`frbench.FRUnalignResult` whose
+            ``canvases`` field is that list and whose ``masks`` field contains
+            matching boolean ``(K,1,H,W)`` tensors. Faces remain separate.
         """
         groups = self._as_aligned_list(aligned)
         dets = (
@@ -317,6 +325,7 @@ class FaceDetector(nn.Module):
         sizes = self._resolve_output_sizes(output_sizes, len(groups))
 
         out: List[torch.Tensor] = []
+        masks: List[torch.Tensor] = []
         for i, (group, det, output_size) in enumerate(zip(groups, dets, sizes)):
             group = group.to(self.device).float()
             if det is None or det.shape[0] == 0:
@@ -326,6 +335,8 @@ class FaceDetector(nn.Module):
                         "has none"
                     )
                 out.append(group.new_empty((0, group.shape[1], *output_size)))
+                if return_mask:
+                    masks.append(group.new_empty((0, 1, *output_size), dtype=torch.bool))
                 continue
             if keep_largest:
                 det = self._keep_largest(det)
@@ -340,15 +351,21 @@ class FaceDetector(nn.Module):
                 if template is not None
                 else arcface_template((group.shape[-2], group.shape[-1]))
             )
-            out.append(
-                unalign(
-                    group,
-                    ldmks,
-                    output_size,
-                    template=tmpl,
-                    max_supersample=max_supersample,
-                )
+            result = unalign(
+                group,
+                ldmks,
+                output_size,
+                template=tmpl,
+                max_supersample=max_supersample,
+                return_mask=return_mask,
             )
+            if return_mask:
+                out.append(result.canvases)
+                masks.append(result.masks)
+            else:
+                out.append(result)
+        if return_mask:
+            return FRUnalignResult(canvases=out, masks=masks)
         return out
 
     def crop(

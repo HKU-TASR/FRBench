@@ -90,8 +90,55 @@ def test_unalign_identity_when_landmarks_match_template():
     aligned = torch.rand(2, 3, 112, 112) * 255
     ldmks = frbench.ARCFACE_112_TEMPLATE.unsqueeze(0).expand(2, -1, -1)
     restored = frbench.unalign(aligned, ldmks, (112, 112))
+    assert isinstance(restored, torch.Tensor)  # default return stays backward-compatible
     assert restored.shape == aligned.shape
     assert torch.allclose(restored, aligned, atol=1e-2)
+
+
+def test_unalign_can_return_boolean_masks():
+    aligned = torch.rand(2, 3, 112, 112) * 255
+    ldmks = frbench.ARCFACE_112_TEMPLATE.unsqueeze(0).expand(2, -1, -1)
+    result = frbench.unalign(aligned, ldmks, (112, 112), return_mask=True)
+    canvases, masks = result
+
+    assert result.canvases is canvases
+    assert result.masks is masks
+    assert canvases.shape == aligned.shape
+    assert masks.shape == (2, 1, 112, 112)
+    assert masks.dtype == torch.bool
+    assert masks.all()
+
+
+def test_unalign_mask_is_geometric_not_pixel_based():
+    aligned = torch.zeros(1, 3, 112, 112)
+    offset = torch.tensor([15.25, 20.25])
+    ldmks = (frbench.ARCFACE_112_TEMPLATE + offset).unsqueeze(0)
+    result = frbench.unalign(
+        aligned,
+        ldmks,
+        (150, 160),
+        return_mask=True,
+    )
+
+    assert result.canvases.count_nonzero() == 0
+    assert result.masks[0, 0, 50, 50]
+    assert not result.masks[0, 0, 5, 5]
+
+
+def test_unalign_mask_thresholds_antialiased_rotated_coverage():
+    matrix = make_transform(scale=0.8, angle_deg=20.0, tx=10.0, ty=5.0)
+    inv = frbench.invert_similarity(matrix.unsqueeze(0))[0]
+    ldmks = apply_transform(inv, frbench.ARCFACE_112_TEMPLATE).unsqueeze(0)
+    result = frbench.unalign(
+        torch.ones(1, 3, 112, 112),
+        ldmks,
+        (180, 180),
+        return_mask=True,
+    )
+
+    assert result.masks.dtype == torch.bool
+    assert result.masks.any()
+    assert (~result.masks).any()
 
 
 def test_unalign_uses_source_to_aligned_direction_and_zero_fills():
@@ -144,6 +191,11 @@ def test_unalign_empty_batch_has_source_canvas_shape():
     ldmks = torch.empty(0, 5, 2)
     restored = frbench.unalign(aligned, ldmks, (180, 240))
     assert restored.shape == (0, 3, 180, 240)
+
+    result = frbench.unalign(aligned, ldmks, (180, 240), return_mask=True)
+    assert result.canvases.shape == (0, 3, 180, 240)
+    assert result.masks.shape == (0, 1, 180, 240)
+    assert result.masks.dtype == torch.bool
 
 
 def test_unalign_antialiases_when_downsampling():

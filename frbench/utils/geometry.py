@@ -6,12 +6,13 @@ preserve the input value range, so they compose with any downstream model.
 """
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Literal, overload, Tuple, Union
 import math
 
 import torch
 import torch.nn.functional as F
 
+from ..types import FRUnalignResult
 from .log import warn
 
 #: Canonical InsightFace/ArcFace 5-point template for a 112x112 crop
@@ -227,13 +228,39 @@ def align(
     return sampled
 
 
+@overload
 def unalign(
     aligned: torch.Tensor,
     ldmks: torch.Tensor,
     output_size: Tuple[int, int],
     template: torch.Tensor = ARCFACE_112_TEMPLATE,
     max_supersample: int = 4,
-) -> torch.Tensor:
+    *,
+    return_mask: Literal[False] = False,
+) -> torch.Tensor: ...
+
+
+@overload
+def unalign(
+    aligned: torch.Tensor,
+    ldmks: torch.Tensor,
+    output_size: Tuple[int, int],
+    template: torch.Tensor = ARCFACE_112_TEMPLATE,
+    max_supersample: int = 4,
+    *,
+    return_mask: Literal[True],
+) -> FRUnalignResult[torch.Tensor]: ...
+
+
+def unalign(
+    aligned: torch.Tensor,
+    ldmks: torch.Tensor,
+    output_size: Tuple[int, int],
+    template: torch.Tensor = ARCFACE_112_TEMPLATE,
+    max_supersample: int = 4,
+    *,
+    return_mask: bool = False,
+) -> Union[torch.Tensor, FRUnalignResult[torch.Tensor]]:
     """Reproject aligned faces onto source-image-sized canvases.
 
     This is the spatial inverse of :func:`align`, not a lossless image inverse:
@@ -249,10 +276,14 @@ def unalign(
             image pixel coordinates.
         max_supersample: Maximum anti-aliasing supersample factor. Supersampling
             is used when the reprojection downsamples ``aligned``.
+        return_mask: If ``True``, also return a boolean ``(F, 1, H, W)``
+            coverage mask for each face.
 
     Returns:
-        ``(F, C, H, W)`` source-coordinate canvases, zero-filled outside the
-        footprint of each aligned face.
+        By default, ``(F, C, H, W)`` source-coordinate canvases, zero-filled
+        outside each aligned face. With ``return_mask=True``, an
+        :class:`frbench.FRUnalignResult` containing the canvases and matching
+        boolean ``(F, 1, H, W)`` masks.
     """
     if aligned.dim() != 4:
         raise ValueError(
@@ -274,7 +305,11 @@ def unalign(
     if max_supersample < 1:
         raise ValueError("max_supersample must be at least 1")
     if F_num == 0:
-        return aligned.new_empty((0, C, oh, ow))
+        canvases = aligned.new_empty((0, C, oh, ow))
+        if not return_mask:
+            return canvases
+        masks = aligned.new_empty((0, 1, oh, ow), dtype=torch.bool)
+        return FRUnalignResult(canvases=canvases, masks=masks)
 
     ldmks = ldmks.to(device=aligned.device, dtype=aligned.dtype)
     matrix = estimate_similarity_transform(ldmks, template)  # source -> aligned
@@ -308,9 +343,22 @@ def unalign(
         padding_mode="zeros",
         align_corners=True,
     )
+    coverage = None
+    if return_mask:
+        coverage = F.grid_sample(
+            aligned.new_ones((F_num, 1, aligned_h, aligned_w)),
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
     if S > 1:
         sampled = F.avg_pool2d(sampled, kernel_size=S)
-    return sampled
+        if coverage is not None:
+            coverage = F.avg_pool2d(coverage, kernel_size=S)
+    if coverage is None:
+        return sampled
+    return FRUnalignResult(canvases=sampled, masks=coverage >= 0.5)
 
 
 def estimate_similarity_transform(landmarks: torch.Tensor, template: torch.Tensor) -> torch.Tensor:

@@ -158,36 +158,49 @@ Note that `FR.detect()` doesn't build the recognition backbone — it only loads
 
 ### Face Cropping and Alignment
 
-The geometry primitives are also exported as standalone functions:
+`FaceDetector.align` returns one `(K, 3, H, W)` tensor per source image.
+Aligned faces can be reprojected into source coordinates with `unalign`. Request
+the optional masks when compositing an edited face over its original image:
+
+```python
+dets = detector.detect(img)
+aligned = detector.align(img, dets)
+
+result = detector.unalign(
+    aligned,
+    dets,
+    output_sizes=img.shape[-2:],
+    return_mask=True,
+)
+canvases, masks = result
+
+# Each face has its own source-sized canvas and boolean (1, H, W) mask.
+merged_face = torch.where(masks[0][0], canvases[0][0], img)
+```
+
+Faces remain separate rather than being merged automatically, so applications
+can choose their own overlap and blending policy. Unalignment reverses the
+coordinates, not the information loss from cropping and interpolation; pixels
+outside the mask come directly from the original image in the example above.
+
+The differentiable geometry primitives are also available as standalone
+functions:
 
 ```python
 frbench.ARCFACE_112_TEMPLATE            # canonical (5, 2) ArcFace template, 112x112
 frbench.arcface_template((224, 224))    # template scaled to another crop size
 frbench.align(img, landmarks, template) # differentiable 5-point alignment
-frbench.unalign(aligned, landmarks, (source_h, source_w), template)
+result = frbench.unalign(
+    aligned_faces,
+    landmarks,
+    (source_h, source_w),
+    template,
+    return_mask=True,
+)
 frbench.crop(img, boxes)                # differentiable box crop + anti-aliased resize
 frbench.estimate_similarity_transform(landmarks, template)  # (F, 2, 3) closed-form fit
 frbench.invert_similarity(matrix)
 ```
-
-`unalign` reprojects a batch of aligned faces back into source-image coordinates,
-with one zero-padded canvas per face. `FaceDetector.unalign` handles the
-per-image structure returned by `FaceDetector.align`:
-
-```python
-dets = detector.detect(imgs)
-aligned = detector.align(imgs, dets)
-restored = detector.unalign(
-    aligned,
-    dets,
-    output_sizes=[img.shape[-2:] for img in imgs],
-)  # restored[i]: (K, 3, source_h, source_w)
-```
-
-Unalignment reverses the coordinates, not the information loss from cropping
-and interpolation. Traditional face-editing pipelines preserve the untouched
-image by inverse-warping an edited face and mask, then compositing that layer
-over the original source image.
 
 ### Notes on devices
 

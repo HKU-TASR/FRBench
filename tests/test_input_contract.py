@@ -84,6 +84,41 @@ def test_detector_unalign_supports_per_image_output_sizes():
     assert detector.retinaface is None
 
 
+def test_detector_unalign_mask_result_matches_per_image_structure():
+    detector = FaceDetector()
+    template = frbench.ARCFACE_112_TEMPLATE
+    dets = frbench.FRDetectResult.from_landmarks(
+        [
+            torch.stack([template + 5.0, template + 15.0]),
+            template + torch.tensor([20.0, 25.0]),
+        ]
+    )
+    aligned = [
+        torch.zeros(2, 3, 112, 112),
+        torch.zeros(1, 3, 112, 112),
+    ]
+
+    result = detector.unalign(
+        aligned,
+        dets,
+        output_sizes=[(140, 150), (160, 180)],
+        return_mask=True,
+    )
+    assert isinstance(result, frbench.FRUnalignResult)
+    canvases, masks = result
+    assert [tuple(item.shape) for item in canvases] == [
+        (2, 3, 140, 150),
+        (1, 3, 160, 180),
+    ]
+    assert [tuple(item.shape) for item in masks] == [
+        (2, 1, 140, 150),
+        (1, 1, 160, 180),
+    ]
+    assert all(mask.dtype == torch.bool for mask in masks)
+    assert all(mask.any() for mask in masks)
+    assert all(canvas.count_nonzero() == 0 for canvas in canvases)
+
+
 def test_detector_unalign_empty_detections_yield_empty_canvases():
     detector = FaceDetector()
     dets = frbench.FRDetectResult(detections=[None, torch.empty(0, 16)])
@@ -94,6 +129,17 @@ def test_detector_unalign_empty_detections_yield_empty_canvases():
     )
     assert restored[0].shape == (0, 3, 120, 130)
     assert restored[1].shape == (0, 3, 140, 150)
+
+    result = detector.unalign(
+        [torch.empty(0, 3, 112, 112), torch.empty(0, 3, 112, 112)],
+        dets,
+        output_sizes=[(120, 130), (140, 150)],
+        return_mask=True,
+    )
+    assert result.canvases[0].shape == (0, 3, 120, 130)
+    assert result.masks[0].shape == (0, 1, 120, 130)
+    assert result.masks[1].shape == (0, 1, 140, 150)
+    assert result.masks[0].dtype == torch.bool
 
 
 def test_detector_unalign_validates_group_counts_and_sizes():
@@ -141,6 +187,18 @@ def test_detector_unalign_matches_align_keep_largest_selection():
     assert restored[0].shape == (1, 3, 160, 160)
     assert restored[0][0, :, 60, 60].mean() == pytest.approx(100.0)
     assert restored[0][0, :, 10, 10].count_nonzero() == 0
+
+    result = detector.unalign(
+        aligned,
+        dets,
+        output_sizes=(160, 160),
+        keep_largest=True,
+        return_mask=True,
+    )
+    assert result.canvases[0].shape == (1, 3, 160, 160)
+    assert result.masks[0].shape == (1, 1, 160, 160)
+    assert result.masks[0][0, 0, 60, 60]
+    assert not result.masks[0][0, 0, 10, 10]
 
 
 def test_preprocessor_precropped_path_needs_no_detector():
