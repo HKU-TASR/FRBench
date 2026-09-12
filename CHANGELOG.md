@@ -4,6 +4,12 @@ All notable changes to FRBench are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pretrained weights are versioned separately via `weights-v*` release tags (see [`RELEASING.md`](./RELEASING.md)).
 
+## [1.1.3] - 2026-09-12
+
+### Fixed
+
+- SwinV2 activation checkpointing now passes `use_reentrant=False`, matching SwinV1/MLP. The omitted default (`True`) is incompatible with `torch.autograd.grad` and `.backward(inputs=...)`, which breaks consumers that differentiate through `swinv2-b_curricularface_ms1m` (the only published Swin YAML with `use_checkpoint: true`).
+
 ## [1.1.2] - 2026-07-17
 
 ### Added
@@ -51,6 +57,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Initial public release: unified, end-to-end differentiable face-recognition pipeline (`frbench.FR`) with 45+ pretrained weights covering 25 backbones, 9 loss functions, and 3 training datasets.
 - On-demand weight downloads from GitHub Releases with SHA-256 verification, `frbench-download` CLI, verbosity switches, and update checks.
 
+[1.1.3]: https://github.com/HKU-TASR/FRBench/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/HKU-TASR/FRBench/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/HKU-TASR/FRBench/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/HKU-TASR/FRBench/compare/v1.0.0...v1.1.0

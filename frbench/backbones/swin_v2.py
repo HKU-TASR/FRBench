@@ -552,7 +552,7 @@ class BasicLayerV2(Module):
         """
         for blk in self.blocks:
             if self.use_checkpoint:
-                x = checkpoint.checkpoint(blk, x)
+                x = checkpoint.checkpoint(blk, x, use_reentrant=False)
             else:
                 x = blk(x)
         if self.downsample is not None:
